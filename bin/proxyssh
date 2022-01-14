@@ -1,0 +1,50 @@
+#!/bin/bash
+# vim: set noexpandtab syntax=bash :
+#//! usage: $0 <host> [<command>]
+#//!
+#//! environment:
+#//!  	PROXYSSH_SSHOPTS=<ssh options>
+#//! 	PROXYSSH_TIMEOUT=<connection timeout>
+#//! 	PROXYSSH_JUMPBOX=<proxy host>
+
+set -eo pipefail
+_SCRIPT="$(readlink -e "$0")"
+. "$(dirname "${_SCRIPT}")/../libexec/irissystem/bin-common.sh"
+
+function getSshConfVar {
+	ssh -G "${1}" 2>/dev/null | grep -E "^${2}\s+" | awk '{ print $2 }'
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-h|--help)
+			i_printHelp
+			exit 0
+			;;
+
+		*) break;;
+	esac
+
+	shift
+done
+
+sshopts="${PROXYSSH_SSHOPTS:--q}"
+timeout="${PROXYSSH_TIMEOUT:-500ms}"
+jumpbox="${PROXYSSH_JUMPBOX:-proxyssh-jumpbox}"
+host="${1}"; shift
+
+# Get SSH config for this host
+real_host="$(getSshConfVar "${host}" hostname)"
+real_port="$(getSshConfVar "${host}" port)"
+real_user="$(getSshConfVar "${host}" user)"
+
+# Attempt connection to host SSH port
+if nc </dev/null 2>/dev/null -w "${timeout}" --send-only "${real_host}" "${real_port}"; then
+	# Port is open, do a normal SSH there
+	e_info "Host ${real_host} reachable, not proxying"
+	exec ssh ${sshopts} -p "${real_port}" "${real_user}@${real_host}" "$@"
+fi
+
+# Port isn't open, proxy the connection
+e_warn "Host ${real_host} not reachable, proxying"
+exec ssh -qAt "${jumpbox}" ssh ${sshopts} -p "${real_port}" "${real_user}@${real_host}" "$@"
